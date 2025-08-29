@@ -49,6 +49,40 @@ flowchart TD
 ```
 
 ---
+# CI/CD Tools - One Liner Overview
 
+Brief descriptions and advantages of tools used in GitHub Actions CI/CD pipeline.
+
+---
+
+## 1. ServiceNow  
+**Description:** ITSM platform for automating workflows and approvals.  
+**Advantage:** Adds automated change approvals and compliance checks.
+
+---
+
+## 2. Trivy  
+**Description:** Vulnerability scanner for containers and code.  
+**Advantage:** Fast security scans for images and dependencies.
+
+---
+
+## 3. Docker  
+**Description:** Tool to build and run containerized applications.  
+**Advantage:** Ensures consistent app environments and easy deployment.
+
+---
+
+## 4. Docker Hub  
+**Description:** Cloud registry for Docker images.  
+**Advantage:** Stores and shares images with CI/CD automation support.
+
+---
+
+## 5. Helm  
+**Description:** Kubernetes package manager using charts.  
+**Advantage:** Simplifies app deployment and versioning in K8s.
+
+---
 
 
