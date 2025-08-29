@@ -1,0 +1,61 @@
+name: CD Pipeline
+
+on:
+  repository_dispatch:
+    types: [cr-approved]   # Triggered automatically when CR is approved via webhook
+
+env:
+  IMAGE_NAME: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/myapp
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Verify Change Request status
+      - name: Fetch Change Request
+        id: check-cr
+        run: |
+          CR_ID=${{ github.event.client_payload.change_request_id }}
+          echo "Checking CR $CR_ID"
+
+          CR=$(curl -s -H "Authorization: Bearer ${{ secrets.TICKETING_TOKEN }}" \
+            https://<Service Now URL >/api/change-request/$CR_ID)
+
+          STATUS=$(echo "$CR" | jq -r '.status')
+          if [ "$STATUS" != "APPROVED" ]; then
+            echo "Change Request not approved. Current status: $STATUS"
+            exit 1
+          fi
+
+          echo "CR_IMAGE=$(echo "$CR" | jq -r '.image')" >> $GITHUB_ENV
+
+      # Step 2: Checkout Helm chart repo
+      - name: Checkout Helm repo
+        uses: actions/checkout@v4
+        with:
+          repository: myorg/helm-charts
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: charts
+
+      # Step 3: Replace Docker image in Helm values
+      - name: Update Helm values
+        run: |
+          echo "Updating Helm values with image: ${{ env.CR_IMAGE }}"
+          yq -i '.image.repository = "${{ env.IMAGE_NAME }}" | .image.tag = "${{ env.CR_IMAGE##*: }}"' charts/myapp/values.yaml
+
+      # Step 4: Deploy to Kubernetes using Helm
+      - name: Helm upgrade
+        run: |
+          helm upgrade --install myapp charts/myapp \
+            --namespace myapp \
+            --set image.repository=${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ env.CR_IMAGE##*: }}
+
+      # Step 5: Post back deployment status to ticketing system
+      - name: Update CR status
+        run: |
+          CR_ID=${{ github.event.client_payload.change_request_id }}
+          curl -sS -X PATCH "https://<Service Now URL>/api/change-request/$CR_ID" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.TICKETING_TOKEN }}" \
+            -d '{"status":"DEPLOYED"}'
