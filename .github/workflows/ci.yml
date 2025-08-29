@@ -1,0 +1,83 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/myapp
+
+jobs:
+  ci-build:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout the repo to GIT.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Run code scan (lint + simple checks)
+      - name: Run static analysis
+        run: |
+          echo "Running code lint/static checks..."
+          # Example: npm run lint / mvn verify / pylint src/
+
+      # Step 3: Detect Ticket ID
+      - name: Detect ticket ID
+        run: |
+          BRANCH_TICKET=$(echo "${GITHUB_HEAD_REF}" | grep -oE '[A-Z]+-[0-9]+' || true)
+          COMMIT_TICKET=$(git log -1 --pretty=%B | grep -oE '[A-Z]+-[0-9]+' || true)
+          TICKET_ID=${BRANCH_TICKET:-$COMMIT_TICKET}
+          if [ -z "$TICKET_ID" ]; then
+            echo "No ticket ID found. Please add something like JIRA-123 in branch or commit."
+            exit 1
+          fi
+          echo "TICKET_ID=$TICKET_ID" >> $GITHUB_ENV
+
+      # Step 4: Build Docker image
+      - name: Build Docker image
+        run: |
+          TAG="${{ env.TICKET_ID }}-${GITHUB_SHA::8}"
+          docker build -t $IMAGE_NAME:$TAG -t $IMAGE_NAME:latest .
+          echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
+
+      # Step 5: Push image to Docker Hub
+      - name: Push image
+        run: |
+          echo "${{ secrets.DOCKER_HUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
+          docker push $IMAGE_NAME:${{ env.IMAGE_TAG }}
+          docker push $IMAGE_NAME:latest
+
+      # Step 6: Run Trivy scan
+      - name: Security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: 'json'
+          output: 'trivy-report.json'
+          exit-code: '0'
+
+      # Step 7: Create Change Request in Service Now.
+      - name: Create Change Request
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        run: |
+          SCAN_SUMMARY=$(jq -r '.Results? // ""' trivy-report.json || true)
+          PAYLOAD=$(jq -n \
+            --arg ticketId "${{ env.TICKET_ID }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg image "$IMAGE" \
+            --arg scan "$SCAN_SUMMARY" \
+            --arg branch "${{ github.head_ref }}" \
+            '{ticketId:$ticketId, commit:$commit, image:$image, scanSummary:$scan, branch:$branch, status:"PENDING"}')
+
+          curl -sS -X POST "https://<Service Now URL>/api/change-request" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.TICKETING_TOKEN }}" \
+            -d "$PAYLOAD"
+
+      # Step 8: Upload Trivy scan results
+      - name: Upload scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
